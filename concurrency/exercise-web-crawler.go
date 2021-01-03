@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"sync"
 )
 
 type Fetcher interface {
@@ -10,33 +11,73 @@ type Fetcher interface {
 	Fetch(url string) (body string, urls []string, err error)
 }
 
+type Status int
+
 const (
-	pending = iota
+	started Status = iota
 )
+
+type Tasks struct {
+	c     sync.Mutex
+	tasks map[string]Status
+}
+
+var tasks = Tasks{
+	tasks: make(map[string]Status),
+}
+
+func (t *Tasks) PutIfAbsent(url string, status Status) bool {
+	t.c.Lock()
+	defer t.c.Unlock()
+	_, exists := t.tasks[url]
+	if !exists {
+		t.tasks[url] = status
+	}
+	return !exists
+}
 
 // Crawl uses fetcher to recursively crawl
 // pages starting with url, to a maximum of depth.
-func Crawl(url string, depth int, fetcher Fetcher) {
+func Crawl(url string, depth int, fetcher Fetcher, c chan bool) {
 	// TODO: Fetch URLs in parallel.
 	// TODO: Don't fetch the same URL twice.
 	// This implementation doesn't do either:
+	//defer sendCloseSignal(c)
 	if depth <= 0 {
+		sendCloseSignal(c, url)
+		return
+	}
+	if added := tasks.PutIfAbsent(url, started); !added {
+		sendCloseSignal(c, url)
 		return
 	}
 	body, urls, err := fetcher.Fetch(url)
 	if err != nil {
 		fmt.Println(err)
+		sendCloseSignal(c, url)
 		return
 	}
+	childChan := make(chan bool, len(urls))
 	fmt.Printf("found: %s %q\n", url, body)
 	for _, u := range urls {
-		Crawl(u, depth-1, fetcher)
+		go Crawl(u, depth-1, fetcher, childChan)
 	}
+	for range urls {
+		<-childChan
+	}
+	sendCloseSignal(c, url)
 	return
 }
 
+func sendCloseSignal(c chan bool, url string) {
+	fmt.Println("\t\t\t\tBefore sending turn off", url)
+	c <- true
+}
+
 func main() {
-	Crawl("https://golang.org/", 4, fetcher)
+	c := make(chan bool)
+	Crawl("https://golang.org/", 4, fetcher, c)
+	<-c
 }
 
 // fakeFetcher is Fetcher that returns canned results.
