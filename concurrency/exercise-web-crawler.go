@@ -10,6 +10,10 @@ type Fetcher interface {
 	Fetch(url string) (body string, urls []string, err error)
 }
 
+const (
+	pending = iota
+)
+
 // Crawl uses fetcher to recursively crawl
 // pages starting with url, to a maximum of depth.
 func Crawl(url string, depth int, fetcher Fetcher) {
